@@ -1,38 +1,48 @@
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
-use near_sdk::near_bindgen;
+use near_sdk::collections::UnorderedMap;
+use near_sdk::json_types::U128;
+use near_sdk::{env, near_bindgen, AccountId};
+
+mod token_receiver;
 
 #[near_bindgen]
-#[derive(Default, BorshDeserialize, BorshSerialize)]
+#[derive(BorshDeserialize, BorshSerialize)]
 pub struct Contract {
-    // SETUP CONTRACT STATE
+    pub owner_id: AccountId,
+    pub locked_nfts: UnorderedMap<String, AccountId>,
 }
 
 #[near_bindgen]
 impl Contract {
-    // ADD CONTRACT METHODS HERE
-}
-
-/*
- * the rest of this file sets up unit tests
- * to run these, the command will be:
- * cargo test --package rust-template -- --nocapture
- * Note: 'rust-template' comes from Cargo.toml's 'name' key
- */
-
-// use the attribute below for unit tests
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use near_sdk::test_utils::{get_logs, VMContextBuilder};
-    use near_sdk::{testing_env, AccountId};
-
-    // part of writing unit tests is setting up a mock context
-    // provide a `predecessor` here, it'll modify the default context
-    fn get_context(predecessor: AccountId) -> VMContextBuilder {
-        let mut builder = VMContextBuilder::new();
-        builder.predecessor_account_id(predecessor);
-        builder
+    pub fn new(owner_id: AccountId) -> Self {
+        Contract {
+            owner_id,
+            locked_nfts: UnorderedMap::new(b"m"),
+        }
     }
 
-    // TESTS HERE
+    pub fn deposit(&mut self, _asset: AccountId, _amount: U128) {}
+
+    pub fn supply_collateral_and_borrow(&mut self, position_id: u128) {
+        let account_id = env::predecessor_account_id();
+        self.assert_account_owns_nft_on_lending(position_id.to_string(), account_id);
+    }
+
+    pub fn return_collateral_and_repay(&mut self, collateral_id: u128) {
+        let account_id = env::predecessor_account_id();
+        self.assert_account_owns_nft_on_lending(collateral_id.to_string(), account_id);
+    }
+
+    pub fn liquidate(&mut self, _collateral_id: u128) {}
+
+    fn assert_account_owns_nft_on_lending(&self, token_id: String, account_id: AccountId) {
+        if let Some(owner) = self.locked_nfts.get(&token_id) {
+            assert_eq!(
+                owner, account_id,
+                "User did not locked this NFT on lending contract"
+            );
+        } else {
+            panic!("User did not locked this NFT on lending contract");
+        }
+    }
 }
