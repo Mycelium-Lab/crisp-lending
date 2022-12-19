@@ -7,10 +7,10 @@ use near_sdk::json_types::U128;
 use near_sdk::{env, near_bindgen, AccountId};
 
 mod balance;
+mod borrow;
 mod deposit;
 mod errors;
 mod token_receiver;
-mod borrow;
 
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize)]
@@ -62,6 +62,7 @@ impl Contract {
         let reserves_amount = self.reserves.get(&asset.to_string()).unwrap_or(0);
         self.reserves
             .insert(&asset.to_string(), &(reserves_amount + amount.0));
+        // TO DO
     }
 
     pub fn close_deposit(&mut self, deposit_id: u128) {
@@ -70,19 +71,24 @@ impl Contract {
             self.increase_balance(&account_id, &deposit.asset, deposit.amount);
             self.deposits.remove(&deposit_id);
         }
+        // TO DO
     }
 
     pub fn supply_collateral_and_borrow(&mut self, position_id: u128) {
         let account_id = env::predecessor_account_id();
         self.assert_account_owns_nft_on_lending(position_id.to_string(), account_id);
+        // TO DO
     }
 
     pub fn return_collateral_and_repay(&mut self, borrow_id: u128) {
         let account_id = env::predecessor_account_id();
         self.assert_account_owns_nft_on_lending(borrow_id.to_string(), account_id);
+        // TO DO
     }
 
-    pub fn liquidate(&mut self, borrow_id: u128) {}
+    pub fn liquidate(&mut self, _borrow_id: u128) {
+        // TO DO
+    }
 
     fn assert_account_owns_nft_on_lending(&self, token_id: String, account_id: AccountId) {
         if let Some(owner) = self.locked_nfts.get(&token_id) {
