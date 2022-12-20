@@ -1,6 +1,8 @@
+use std::collections::HashMap;
+
 use balance::BalancesMap;
 use borrow::Borrow;
-use deposit::Deposit;
+use deposit::{Deposit, DepositId};
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::collections::UnorderedMap;
 use near_sdk::json_types::U128;
@@ -12,15 +14,16 @@ mod deposit;
 mod errors;
 mod token_receiver;
 
+pub const APR: u16 = 500;
+
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize)]
 pub struct Contract {
     pub owner_id: AccountId,
     pub locked_nfts: UnorderedMap<String, AccountId>,
     pub balances_map: BalancesMap,
-    pub deposits: UnorderedMap<u128, Deposit>,
-    pub deposits_created_number: u128,
-    pub deposits_per_owner: UnorderedMap<u128, Deposit>,
+    pub deposits: HashMap<DepositId, Deposit>,
+    pub deposits_created_number: DepositId,
     pub reserves: UnorderedMap<AccountId, u128>,
     pub borrows: UnorderedMap<u128, Borrow>,
     pub borrows_number: u128,
@@ -34,9 +37,8 @@ impl Contract {
             owner_id,
             locked_nfts: UnorderedMap::new(b"m"),
             balances_map: UnorderedMap::new(b"b"),
-            deposits: UnorderedMap::new(b"d"),
+            deposits: HashMap::new(),
             deposits_created_number: 0,
-            deposits_per_owner: UnorderedMap::new(b"o"),
             reserves: UnorderedMap::new(b"r"),
             borrows: UnorderedMap::new(b"b"),
             borrows_number: 0,
@@ -52,26 +54,70 @@ impl Contract {
             asset: asset.clone(),
             amount: amount.0,
             timestamp,
+            last_update_timestamp: timestamp,
+            apr: APR,
+            growth: 0,
         };
-        self.deposits
-            .insert(&self.deposits_created_number, &deposit);
-        self.deposits_per_owner
-            .insert(&self.deposits_created_number, &deposit);
+        self.deposits.insert(self.deposits_created_number, deposit);
         self.deposits_created_number += 1;
         self.decrease_balance(&account_id, &asset.to_string(), amount.0);
         let reserves_amount = self.reserves.get(&asset.to_string()).unwrap_or(0);
         self.reserves
             .insert(&asset.to_string(), &(reserves_amount + amount.0));
-        // TO DO
     }
 
-    pub fn close_deposit(&mut self, deposit_id: u128) {
+    pub fn close_deposit(&mut self, deposit_id: U128) {
         let account_id = env::predecessor_account_id();
-        if let Some(deposit) = self.deposits.remove(&deposit_id) {
+        if let Some(deposit) = self.deposits.remove(&deposit_id.0) {
+            assert_eq!(deposit.owner_id, account_id, "You do not own this deposit");
             self.increase_balance(&account_id, &deposit.asset, deposit.amount);
-            self.deposits.remove(&deposit_id);
+            self.increase_balance(&account_id, &deposit.asset, deposit.growth);
+            let reserves_amount = self.reserves.get(&deposit.asset.to_string()).unwrap_or(0);
+            assert!(reserves_amount > deposit.amount);
+            self.reserves.insert(
+                &deposit.asset.to_string(),
+                &(reserves_amount - deposit.amount),
+            );
+        } else {
+            panic!("Deposit not found");
         }
-        // TO DO
+    }
+
+    pub fn refresh_deposits_growth(&mut self) {
+        let current_timestamp = env::block_timestamp();
+        for (_, deposit) in &mut self.deposits {
+            deposit.refresh_growth(current_timestamp);
+        }
+    }
+
+    #[allow(unused_assignments)]
+    pub fn take_deposit_growth(&mut self, deposit_id: U128, amount: U128) -> U128 {
+        let account_id = env::predecessor_account_id();
+        let mut asset: Option<AccountId> = None;
+        let mut growth = 0;
+        if let Some(deposit) = self.deposits.get_mut(&deposit_id.0) {
+            assert_eq!(deposit.owner_id, account_id, "You do not own this deposit");
+            deposit.refresh_growth(env::block_timestamp());
+            growth = deposit.take_growth(amount.0);
+            asset = Some(deposit.asset.clone());
+        } else {
+            panic!("Deposit not found");
+        }
+        if let Some(asset) = asset {
+            self.increase_balance(&account_id, &asset, growth);
+            return growth.into();
+        }
+        0.into()
+    }
+
+    pub fn get_account_deposits(&self, account_id: AccountId) -> HashMap<DepositId, Deposit> {
+        let mut result: HashMap<DepositId, Deposit> = HashMap::new();
+        for (id, deposit) in &self.deposits {
+            if deposit.owner_id == account_id {
+                result.insert(*id, deposit.clone());
+            }
+        }
+        result
     }
 
     pub fn supply_collateral_and_borrow(&mut self, position_id: u128) {
