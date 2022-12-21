@@ -39,8 +39,7 @@ impl Deposit {
     }
 
     pub fn refresh_growth(&mut self, current_timestamp: u64) {
-        let growth = self.calculate_growth(current_timestamp);
-        self.growth += growth;
+        self.growth += self.calculate_growth(current_timestamp);
     }
 
     pub fn take_growth(&mut self, amount: u128) -> u128 {

@@ -145,6 +145,8 @@ impl Contract {
             amount: to_borrow,
             health_factor,
             last_update_timestamp: env::block_timestamp(),
+            apr: APR_BORROW,
+            fees: 0,
         };
         self.borrows.insert(&self.borrows_number, &borrow);
         self.borrows_number += 1;
@@ -154,6 +156,7 @@ impl Contract {
         let account_id = env::predecessor_account_id();
         self.assert_account_owns_nft_on_lending(borrow_id.to_string(), &account_id);
         let borrow = self.borrows.remove(&borrow_id).unwrap();
+        // check health >= 1
         self.increase_balance(&account_id, &borrow.asset, borrow.amount);
         let mut reserve = self.reserves.get(&borrow.asset).unwrap();
         reserve.borrowed -= borrow.amount;
