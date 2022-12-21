@@ -1,20 +1,24 @@
 use std::collections::HashMap;
 
 use balance::BalancesMap;
-use borrow::Borrow;
+use borrow::{Borrow, BorrowId};
 use deposit::{Deposit, DepositId};
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::collections::UnorderedMap;
 use near_sdk::json_types::U128;
 use near_sdk::{env, near_bindgen, AccountId};
+use reserve::Reserve;
 
 mod balance;
 mod borrow;
 mod deposit;
 mod errors;
+mod reserve;
 mod token_receiver;
 
-pub const APR: u16 = 500;
+pub const APR_DEPOSIT: u16 = 500;
+pub const APR_BORROW: u16 = 1000;
+pub const BORROW_RATIO: f64 = 0.8;
 
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize)]
@@ -24,10 +28,9 @@ pub struct Contract {
     pub balances_map: BalancesMap,
     pub deposits: HashMap<DepositId, Deposit>,
     pub deposits_created_number: DepositId,
-    pub reserves: UnorderedMap<AccountId, u128>,
-    pub borrows: UnorderedMap<u128, Borrow>,
-    pub borrows_number: u128,
-    pub borrows_per_owner: UnorderedMap<u128, Borrow>,
+    pub reserves: UnorderedMap<AccountId, Reserve>,
+    pub borrows: UnorderedMap<BorrowId, Borrow>,
+    pub borrows_number: BorrowId,
 }
 
 #[near_bindgen]
@@ -42,8 +45,13 @@ impl Contract {
             reserves: UnorderedMap::new(b"r"),
             borrows: UnorderedMap::new(b"b"),
             borrows_number: 0,
-            borrows_per_owner: UnorderedMap::new(b"w"),
         }
+    }
+
+    #[private]
+    pub fn create_reserve(&mut self, reserve_token: AccountId) {
+        let reserve = Reserve::default();
+        self.reserves.insert(&reserve_token, &reserve);
     }
 
     pub fn create_deposit(&mut self, asset: AccountId, amount: U128) {
@@ -55,15 +63,15 @@ impl Contract {
             amount: amount.0,
             timestamp,
             last_update_timestamp: timestamp,
-            apr: APR,
+            apr: APR_DEPOSIT,
             growth: 0,
         };
         self.deposits.insert(self.deposits_created_number, deposit);
         self.deposits_created_number += 1;
         self.decrease_balance(&account_id, &asset.to_string(), amount.0);
-        let reserves_amount = self.reserves.get(&asset.to_string()).unwrap_or(0);
-        self.reserves
-            .insert(&asset.to_string(), &(reserves_amount + amount.0));
+        let mut reserve = self.reserves.get(&asset).unwrap();
+        reserve.increase_deposit(amount.0);
+        self.reserves.insert(&asset, &reserve);
     }
 
     pub fn close_deposit(&mut self, deposit_id: U128) {
@@ -72,12 +80,9 @@ impl Contract {
             assert_eq!(deposit.owner_id, account_id, "You do not own this deposit");
             self.increase_balance(&account_id, &deposit.asset, deposit.amount);
             self.increase_balance(&account_id, &deposit.asset, deposit.growth);
-            let reserves_amount = self.reserves.get(&deposit.asset.to_string()).unwrap_or(0);
-            assert!(reserves_amount > deposit.amount);
-            self.reserves.insert(
-                &deposit.asset.to_string(),
-                &(reserves_amount - deposit.amount),
-            );
+            let mut reserve = self.reserves.get(&deposit.asset).unwrap();
+            reserve.decrease_deposit(deposit.amount);
+            self.reserves.insert(&deposit.asset, &reserve);
         } else {
             panic!("Deposit not found");
         }
@@ -120,26 +125,50 @@ impl Contract {
         result
     }
 
+    pub fn get_total_locked_value_in_position(&self, _position_id: u128) {}
+
     pub fn supply_collateral_and_borrow(&mut self, position_id: u128) {
         let account_id = env::predecessor_account_id();
-        self.assert_account_owns_nft_on_lending(position_id.to_string(), account_id);
-        // TO DO
+        self.assert_account_owns_nft_on_lending(position_id.to_string(), &account_id);
+        // 0. somehow get (amount = total_value locked, token)on position
+        // 1. health factor should be 1.25 (???)
+        let health_factor = 0.0;
+        let amount = 0;
+        let to_borrow = (BORROW_RATIO * amount as f64).round() as u128;
+        let token = String::new();
+        self.increase_balance(&account_id, &token, to_borrow);
+        let mut reserve = self.reserves.get(&token).unwrap();
+        reserve.borrowed += to_borrow;
+        self.reserves.insert(&token, &reserve);
+        let borrow = Borrow {
+            asset: token,
+            amount: to_borrow,
+            health_factor,
+            last_update_timestamp: env::block_timestamp(),
+        };
+        self.borrows.insert(&self.borrows_number, &borrow);
+        self.borrows_number += 1;
     }
 
     pub fn return_collateral_and_repay(&mut self, borrow_id: u128) {
         let account_id = env::predecessor_account_id();
-        self.assert_account_owns_nft_on_lending(borrow_id.to_string(), account_id);
-        // TO DO
+        self.assert_account_owns_nft_on_lending(borrow_id.to_string(), &account_id);
+        let borrow = self.borrows.remove(&borrow_id).unwrap();
+        self.increase_balance(&account_id, &borrow.asset, borrow.amount);
+        let mut reserve = self.reserves.get(&borrow.asset).unwrap();
+        reserve.borrowed -= borrow.amount;
+        self.reserves.insert(&borrow.asset, &reserve);
+        // send nft back ?
     }
 
     pub fn liquidate(&mut self, _borrow_id: u128) {
         // TO DO
     }
 
-    fn assert_account_owns_nft_on_lending(&self, token_id: String, account_id: AccountId) {
+    fn assert_account_owns_nft_on_lending(&self, token_id: String, account_id: &AccountId) {
         if let Some(owner) = self.locked_nfts.get(&token_id) {
             assert_eq!(
-                owner, account_id,
+                &owner, account_id,
                 "User did not locked this NFT on lending contract"
             );
         } else {
