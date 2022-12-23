@@ -131,10 +131,8 @@ impl Contract {
         let account_id = env::predecessor_account_id();
         self.assert_account_owns_nft_on_lending(position_id.to_string(), &account_id);
         // 0. somehow get (amount = total_value locked, token)on position
-        // 1. health factor should be 1.25 (???)
-        let health_factor = 0.0;
-        let amount = 0;
-        let to_borrow = (BORROW_RATIO * amount as f64).round() as u128;
+        let collateral = 0;
+        let to_borrow = (BORROW_RATIO * collateral as f64).round() as u128; // health factor 1.25
         let token = String::new();
         self.increase_balance(&account_id, &token, to_borrow);
         let mut reserve = self.reserves.get(&token).unwrap();
@@ -143,7 +141,9 @@ impl Contract {
         let borrow = Borrow {
             asset: token,
             amount: to_borrow,
-            health_factor,
+            collateral,
+            position_id,
+            health_factor: 1.25,
             last_update_timestamp: env::block_timestamp(),
             apr: APR_BORROW,
             fees: 0,
@@ -156,16 +156,38 @@ impl Contract {
         let account_id = env::predecessor_account_id();
         self.assert_account_owns_nft_on_lending(borrow_id.to_string(), &account_id);
         let borrow = self.borrows.remove(&borrow_id).unwrap();
-        // check health >= 1
-        self.increase_balance(&account_id, &borrow.asset, borrow.amount);
+        borrow.assert_health_factor_is_above_1();
+        self.increase_balance(&account_id, &borrow.asset, borrow.amount - borrow.fees);
         let mut reserve = self.reserves.get(&borrow.asset).unwrap();
         reserve.borrowed -= borrow.amount;
         self.reserves.insert(&borrow.asset, &reserve);
         // send nft back ?
     }
 
-    pub fn liquidate(&mut self, _borrow_id: u128) {
-        // TO DO
+    pub fn get_liquidation_list(&self) -> Vec<BorrowId> {
+        let mut result = Vec::new();
+        for (id, borrow) in self.borrows.iter() {
+            if borrow.health_factor < 1.0 {
+                result.push(id);
+            }
+        }
+        result
+    }
+
+    pub fn liquidate(&mut self, borrow_id: BorrowId, amount_in: U128, amount_out: U128) {
+        if let Some(mut borrow) = self.borrows.get(&borrow_id) {
+            borrow.assert_health_factor_is_under_1();
+            let discount = (1.0 - borrow.health_factor) / 2.0;
+            let discounted_collateral_sum = amount_out.0 * (1 - discount as u128);
+            assert!(discounted_collateral_sum <= amount_in.0);
+            borrow.collateral -= amount_out.0;
+            borrow.amount -= amount_out.0;
+            borrow.refresh_health_factor();
+            borrow.assert_health_factor_is_under_1();
+            self.borrows.insert(&borrow_id, &borrow);
+        } else {
+            panic!("Borrow not found");
+        }
     }
 
     fn assert_account_owns_nft_on_lending(&self, token_id: String, account_id: &AccountId) {

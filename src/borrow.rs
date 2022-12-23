@@ -8,6 +8,8 @@ pub type BorrowId = u128;
 pub struct Borrow {
     pub asset: AccountId,
     pub amount: u128,
+    pub collateral: u128,
+    pub position_id: u128,
     pub health_factor: f64,
     pub last_update_timestamp: u64,
     pub apr: u16,
@@ -35,5 +37,17 @@ impl Borrow {
 
     pub fn refresh_fees(&mut self, current_timestamp: u64) {
         self.fees += self.calculate_fees(current_timestamp);
+    }
+
+    pub fn refresh_health_factor(&mut self) {
+        self.health_factor = self.collateral as f64 / (self.amount as f64 + self.fees as f64);
+    }
+
+    pub fn assert_health_factor_is_above_1(&self) {
+        assert!(self.health_factor >= 1.0);
+    }
+
+    pub fn assert_health_factor_is_under_1(&self) {
+        assert!(self.health_factor < 1.0);
     }
 }
